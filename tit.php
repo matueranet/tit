@@ -15,7 +15,7 @@ if (!defined("TIT_INCLUSION"))
 {
 	$TITLE = "My Project";              // Project Title
 	$EMAIL = "noreply@example.com";     // "From" email address for notifications
-
+    $MULTIPROJECT = true;
 	// Array of users.
 	// Mandatory fields: username, password (md5 hash)
 	// Optional fields: email, admin (true/false)
@@ -52,6 +52,8 @@ if (get_magic_quotes_gpc()){
 	foreach($_POST as $k=>$v) $_POST[$k] = stripslashes($v);
 }
 
+error_reporting(E_ALL & ~E_NOTICE); //do not show any notices
+
 // Here we go...
 session_start();
 
@@ -64,12 +66,14 @@ if (isset($_POST["login"])){
 		header("Location: {$_SERVER['PHP_SELF']}");
 	}
 	else header("Location: {$_SERVER['PHP_SELF']}?loginerror");
+    die;
 }
 
 // check for logout
 if (isset($_GET['logout'])){
 	$_SESSION['tit']=array();  // username
 	header("Location: {$_SERVER['PHP_SELF']}");
+    die;
 }
 
 if (isset($_GET['loginerror'])) $message = "Invalid username or password";
@@ -88,8 +92,37 @@ try{$db = new PDO($DB_CONNECTION, $DB_USERNAME, $DB_PASSWORD);}
 catch (PDOException $e) {die("DB Connection failed: ".$e->getMessage());}
 
 // create tables if not exist
-@$db->exec("CREATE TABLE issues (id INTEGER PRIMARY KEY, title TEXT, description TEXT, user TEXT, status INTEGER NOT NULL DEFAULT '0', priority INTEGER, notify_emails TEXT, entrytime DATETIME)");
+@$db->exec("CREATE TABLE issues (id INTEGER PRIMARY KEY, title TEXT, description TEXT, user TEXT, status INTEGER NOT NULL DEFAULT '0', priority INTEGER, notify_emails TEXT, entrytime DATETIME, project_id INTEGER)");
 @$db->exec("CREATE TABLE comments (id INTEGER PRIMARY KEY, issue_id INTEGER, user TEXT, description TEXT, entrytime DATETIME)");
+@$db->exec("CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT)");
+
+//if multiproject, fetch the list of projects
+if( $MULTIPROJECT ) {
+    $projects = $db->query('SELECT id, name FROM projects ORDER BY `name` DESC')->fetchAll();
+}
+
+if( $MULTIPROJECT && isset($_GET['project']) ) {
+    $projectId = intval($_GET['project']);
+    foreach( $projects as $project ) {
+        if( $project['id'] == $projectId ) {
+            $_SESSION['tit']['project'] = $project;
+        }
+    }
+}
+
+if( $MULTIPROJECT && !$project ) {
+    if( isset($_SESSION['tit']['project']) ) {
+        $project = $_SESSION['tit']['project'];
+    }
+}
+
+if( $MULTIPROJECT && !isset($_SESSION['tit']['project']) ) {
+    $mode = 'projects';
+}
+
+if( $MULTIPROJECT && isset($project) ) {
+    $TITLE = isset($_SESSION['tit']['project']) ? $_SESSION['tit']['project']['name'] : $TITLE;
+}
 
 if (isset($_GET["id"])){
 	// show issue #id
@@ -101,22 +134,26 @@ if (isset($_GET["id"])){
 // if no issue found, go to list mode
 if (count($issue)==0){
 
-	unset($issue, $comments);
-	// show all issues
+    if( empty($mode) ) {
+        unset($issue, $comments);
+        // show all issues
 
-	$status = 0;
-	if (isset($_GET["status"]))
-		$status = (int)$_GET["status"];
+        $status = 0;
+        if (isset($_GET["status"]))
+            $status = (int)$_GET["status"];
+        
+        $projectId = $MULTIPROJECT ? pdo_escape_string($_SESSION['tit']['project']['id']) : 'null';
 
-	$issues = $db->query(
-		"SELECT id, title, description, user, status, priority, notify_emails, entrytime, comment_user, comment_time ".
-		" FROM issues ".
-		" LEFT JOIN (SELECT max(entrytime) as max_comment_time, issue_id FROM comments GROUP BY issue_id) AS cmax ON cmax.issue_id = issues.id".
-		" LEFT JOIN (SELECT user AS comment_user, entrytime AS comment_time, issue_id FROM comments ORDER BY issue_id DESC, entrytime DESC) AS c ON c.issue_id = issues.id AND cmax.max_comment_time = c.comment_time".
-		" WHERE status=".pdo_escape_string($status ? $status : "0 or status is null"). // <- this is for legacy purposes only
-		" ORDER BY priority, entrytime DESC")->fetchAll();
+        $issues = $db->query(
+            "SELECT id, title, description, user, status, priority, notify_emails, entrytime, comment_user, comment_time ".
+            " FROM issues ".
+            " LEFT JOIN (SELECT max(entrytime) as max_comment_time, issue_id FROM comments GROUP BY issue_id) AS cmax ON cmax.issue_id = issues.id".
+            " LEFT JOIN (SELECT user AS comment_user, entrytime AS comment_time, issue_id FROM comments ORDER BY issue_id DESC, entrytime DESC) AS c ON c.issue_id = issues.id AND cmax.max_comment_time = c.comment_time".
+            " WHERE project_id=$projectId AND status=".pdo_escape_string($status ? $status : "0 or status is null"). // <- this is for legacy purposes only
+            " ORDER BY priority, entrytime DESC")->fetchAll();
 
-	$mode="list";
+        $mode="list";
+    }
 }
 else {
 	$issue = $issue[0];
@@ -136,6 +173,8 @@ if (isset($_POST["createissue"])){
 	$priority=pdo_escape_string($_POST['priority']);
 	$user=pdo_escape_string($_SESSION['tit']['username']);
 	$now=date("Y-m-d H:i:s");
+    
+    $projectId = $MULTIPROJECT ? pdo_escape_string($_SESSION['tit']['project']['id']) : 'null';
 
 	// gather all emails
 	$emails=array();
@@ -145,12 +184,13 @@ if (isset($_POST["createissue"])){
 	$notify_emails = implode(",",$emails);
 
 	if ($id=='')
-		$query = "INSERT INTO issues (title, description, user, priority, notify_emails, entrytime) values('$title','$description','$user','$priority','$notify_emails','$now')"; // create
+		$query = "INSERT INTO issues (title, description, user, priority, notify_emails, entrytime, project_id) values('$title','$description','$user','$priority','$notify_emails','$now', $projectId)"; // create
 	else
 		$query = "UPDATE issues SET title='$title', description='$description' WHERE id='$id'"; // edit
 
 	if (trim($title)!='') {     // title cant be blank
-		@$db->exec($query);
+		$db->exec($query);
+        
 		if ($id==''){
 			// created
 			$id=$db->lastInsertId();
@@ -169,6 +209,7 @@ if (isset($_POST["createissue"])){
 	}
 
 	header("Location: {$_SERVER['PHP_SELF']}");
+    die;
 }
 
 // Delete issue
@@ -187,7 +228,7 @@ if (isset($_GET["deleteissue"])){
 							"Issue deleted by {$_SESSION['tit']['username']}\r\nTitle: $title");
 	}
 	header("Location: {$_SERVER['PHP_SELF']}");
-
+    die;
 }
 
 // Change Priority
@@ -202,6 +243,7 @@ if (isset($_GET["changepriority"])){
 						"Issue Priority changed by {$_SESSION['tit']['username']}\r\nTitle: ".get_col($id,"issues","title")."\r\nURL: http://{$_SERVER['HTTP_HOST']}{$_SERVER['PHP_SELF']}?id=$id");
 
 	header("Location: {$_SERVER['PHP_SELF']}?id=$id");
+    die;
 }
 
 // change status
@@ -216,6 +258,7 @@ if (isset($_GET["changestatus"])){
 						"Issue marked as {$STATUSES[$status]} by {$_SESSION['u']}\r\nTitle: ".get_col($id,"issues","title")."\r\nURL: http://{$_SERVER['HTTP_HOST']}{$_SERVER['PHP_SELF']}?id=$id");
 
 	header("Location: {$_SERVER['PHP_SELF']}?id=$id");
+    die;
 }
 
 // Unwatch
@@ -223,6 +266,7 @@ if (isset($_POST["unwatch"])){
 	$id=pdo_escape_string($_POST['id']);
 	setWatch($id,false);       // remove from watch list
 	header("Location: {$_SERVER['PHP_SELF']}?id=$id");
+    die;
 }
 
 // Watch
@@ -230,6 +274,7 @@ if (isset($_POST["watch"])){
 	$id=pdo_escape_string($_POST['id']);
 	setWatch($id,true);         // add to watch list
 	header("Location: {$_SERVER['PHP_SELF']}?id=$id");
+    die;
 }
 
 
@@ -252,6 +297,7 @@ if (isset($_POST["createcomment"])){
 						"New comment posted by {$user}\r\nTitle: ".get_col($id,"issues","title")."\r\nURL: http://{$_SERVER['HTTP_HOST']}{$_SERVER['PHP_SELF']}?id=$issue_id");
 
 	header("Location: {$_SERVER['PHP_SELF']}?id=$issue_id");
+    die;
 
 }
 
@@ -265,6 +311,44 @@ if (isset($_GET["deletecomment"])){
 		$db->exec("DELETE FROM comments WHERE id='$cid'");
 
 	header("Location: {$_SERVER['PHP_SELF']}?id=$id");
+    die;
+}
+
+//create/edit project
+if( $MULTIPROJECT && isset($_POST['createproject']) ) {
+    $id=pdo_escape_string($_POST['project_id']);
+	$name=pdo_escape_string($_POST['project_name']);
+	
+	if ($id=='') {
+		$query = "INSERT INTO projects (name) values('$name')"; // create
+    } else {
+		$query = "UPDATE projects SET name='$name' WHERE id='$id'"; // edit
+    }
+    
+    if (trim($name)!='') {     // name cant be blank
+	@$db->exec($query);
+        
+        if ($id==''){
+			// created
+			$id=$db->lastInsertId();
+        }
+    }
+    
+	header("Location: {$_SERVER['PHP_SELF']}?project=$id");
+    die;
+}
+
+if( $MULTIPROJECT && isset($_GET['deleteproject']) ) {
+    $id = pdo_escape_string($_GET['id']);
+    
+    $query = "DELETE FROM issues WHERE project_id = $id";
+    @$db->exec($query);
+    $query = "DELETE FROM projects WHERE id = $id";
+    @$db->exec($query);
+    
+    unset($_SESSION['tit']['project']);
+    header("Location: {$_SERVER['PHP_SELF']}");
+    die;
 }
 
 //
@@ -352,7 +436,7 @@ function setWatch($id,$addToWatch){
 		#menu{float: right;}
 		#container{width: 760px; margin: 0 auto; padding: 20px; background-color: #fff;}
 		#footer{padding:10px 0 0 0; margin-top: 20px; text-align: center; border-top: 1px solid #ccc;}
-		#create{padding: 15px; background-color: #f2f2f2;}
+		#create, #createproject {padding: 15px; background-color: #f2f2f2;}
 		.issue{padding:10px 20px; margin: 10px 0; background-color: #f2f2f2;}
 		.comment{padding:5px 10px 10px 10px; margin: 10px 0; border: 1px solid #ccc;}
 		.comment-meta{color: #666;}
@@ -363,14 +447,44 @@ function setWatch($id,$addToWatch){
 		.right{float: right;}
 		.clear{clear:both;}
 	</style>
+    
+    <?php if( $MULTIPROJECT && $mode !== 'projects') { ?>
+    <script type="text/javascript">
+        function showProjectForm(type) {
+            document.getElementById('createproject').className='';
+            if( type === 'create' ) {
+                setProjectFormValues('', '', 'Create');
+            } else {
+                setProjectFormValues('<?php echo $_SESSION['tit']['project']['id']; ?>', '<?php echo addslashes($_SESSION['tit']['project']['name']); ?>', 'Edit');
+            }
+            document.getElementById('project_name').focus();
+        }
+        
+        function setProjectFormValues(id, name, submitLabel) {
+            document.getElementById('project_id').value = id;
+            document.getElementById('project_name').value = name;
+            document.getElementById('project_submit').value = submitLabel;
+        }
+    </script>
+    <?php } ?>
 </head>
-<body>
+<body<?php if(isset($_GET['editproject'])) { ?> onload="showProjectForm('edit');" <?php } ?>>
 <div id='container'>
 	<div id="menu">
 		<?php
-			foreach($STATUSES as $code=>$name) {
-				$style=(isset($_GET[status]) && $_GET[status]==$code) || (isset($issue) && $issue['status']==$code)?"style='font-weight:bold;'":"";
-				echo "<a href='{$_SERVER['PHP_SELF']}?status={$code}' alt='{$name} Issues' $style>{$name} Issues</a> | ";
+            if( $MULTIPROJECT && $projects && $mode !== 'projects') {
+                echo '<select name="project" onchange="var id=this.options[this.selectedIndex].value;window.location.href=\'' . $_SERVER['PHP_SELF'] . '?project=\' + id;">';
+                foreach( $projects as $project ) {
+                    $selected = ($_SESSION['tit']['project']['id'] == $project['id']) ? ' selected="selected"' : '';
+                    echo '<option value="' . $project['id'] . '"' . $selected . '>' . htmlentities($project['name']) . '</option>';
+                }
+                echo '</select> | ';
+            }
+			if( $mode !== 'projects' ) {
+				foreach($STATUSES as $code=>$name) {
+					$style=(isset($_GET[status]) && $_GET[status]==$code) || (isset($issue) && $issue['status']==$code)?"style='font-weight:bold;'":"";
+					echo "<a href='{$_SERVER['PHP_SELF']}?status={$code}' alt='{$name} Issues' $style>{$name} Issues</a> | ";
+				}
 			}
 		?>
 		<a href="<?php echo $_SERVER['PHP_SELF']; ?>?logout" alt="Logout">Logout [<?php echo $_SESSION['tit']['username']; ?>]</a>
@@ -378,111 +492,141 @@ function setWatch($id,$addToWatch){
 
 	<h1><?php echo $TITLE; ?></h1>
 
-	<h2><a href="#" onclick="document.getElementById('create').className='';document.getElementById('title').focus();"><?php echo ($issue['id']==''?"Create":"Edit"); ?> Issue <?php echo $issue['id'] ?></a></h2>
-	<div id="create" class='<?php echo isset($_GET['editissue'])?'':'hide'; ?>'>
-		<a href="#" onclick="document.getElementById('create').className='hide';" style="float: right;">[Close]</a>
-		<form method="POST">
-			<input type="hidden" name="id" value="<?php echo $issue['id']; ?>" />
-			<label>Title</label><input type="text" size="50" name="title" id="title" value="<?php echo htmlentities($issue['title']); ?>" />
-			<label>Description</label><textarea name="description" rows="5" cols="50"><?php echo htmlentities($issue['description']); ?></textarea>
-			<label></label><input type="submit" name="createissue" value="<?php echo ($issue['id']==''?"Create":"Edit"); ?>" />
-<? if (!$issue['id']) { ?>
-			Priority
-				<select name="priority">
-					<option value="1">High</option>
-					<option selected value="2">Medium</option>
-					<option value="3">Low</option>
-				</select>
-<? } ?>
-		</form>
-	</div>
+    <?php if( $mode === 'projects' ) { ?>
+        <h2>Select a project</h2>
+        <?php if(count($projects) > 0 ) { ?>
+            <div id="list">
+                <table border="1" cellpadding="5" width="100%">
+                    <?php foreach( $projects as $project ) { ?>
+                        <tr>
+                            <td><a href="?project=<?php echo $project['id']; ?>"><?php echo $project['name']; ?></a></td>
+                            <td><a href="?editproject&amp;project=<?php echo $project['id']; ?>#createproject">Edit</a> | <a href="?deleteproject&amp;id=<?php echo $project['id']; ?>" onclick="return confirm('Are you sure? All linked issues will also be deleted.');">Delete</a></td>
+                        </tr>
+                    <?php } ?>
+                </table>
+            </div>
+        <?php } else {
+            echo '<p>There are no projects configured yet.</p>';
+        } ?>
+    <?php } else { ?>
+        <h2><a href="#" onclick="document.getElementById('create').className='';document.getElementById('title').focus();"><?php echo ($issue['id']==''?"Create":"Edit"); ?> Issue <?php echo $issue['id'] ?></a></h2>
+        <div id="create" class='<?php echo isset($_GET['editissue'])?'':'hide'; ?>'>
+            <a href="#" onclick="document.getElementById('create').className='hide';" style="float: right;">[Close]</a>
+            <form method="POST">
+                <input type="hidden" name="id" value="<?php echo $issue['id']; ?>" />
+                <label>Title</label><input type="text" size="50" name="title" id="title" value="<?php echo htmlentities($issue['title']); ?>" />
+                <label>Description</label><textarea name="description" rows="5" cols="50"><?php echo htmlentities($issue['description']); ?></textarea>
+                <label></label><input type="submit" name="createissue" value="<?php echo ($issue['id']==''?"Create":"Edit"); ?>" />
+        <?php if (!$issue['id']) { ?>
+                Priority
+                    <select name="priority">
+                        <option value="1">High</option>
+                        <option selected value="2">Medium</option>
+                        <option value="3">Low</option>
+                    </select>
+        <?php } ?>
+            </form>
+        </div>
 
-	<?php if ($mode=="list"): ?>
-	<div id="list">
-	<h2><?php if (isset($STATUSES[$_GET['status']])) echo $STATUSES[$_GET['status']]." "; ?>Issues</h2>
-		<table border=1 cellpadding=5 width="100%">
-			<tr>
-				<th>ID</th>
-				<th>Title</th>
-				<th>Created by</th>
-				<th>Date</th>
-				<th><acronym title="Watching issue?">W</acronym></th>
-				<th>Last Comment</th>
-				<th>Actions</th>
-			</tr>
-			<?php
-			$count=1;
-			foreach ($issues as $issue){
-				$count++;
-				echo "<tr class='p{$issue['priority']}'>\n";
-				echo "<td>{$issue['id']}</a></td>\n";
-				echo "<td><a href='?id={$issue['id']}'>".htmlentities($issue['title'],ENT_COMPAT,"UTF-8")."</a></td>\n";
-				echo "<td>{$issue['user']}</td>\n";
-				echo "<td>{$issue['entrytime']}</td>\n";
-				echo "<td>".($_SESSION['tit']['email']&&strpos($issue['notify_emails'],$_SESSION['tit']['email'])!==FALSE?"&#10003;":"")."</td>\n";
-				echo "<td>".($issue['comment_user'] ? date("M j",strtotime($issue['comment_time'])) . " (" . $issue['comment_user'] . ")" : "")."</td>\n";
-				echo "<td><a href='?editissue&id={$issue['id']}'>Edit</a>";
-				if ($_SESSION['tit']['admin'] || $_SESSION['tit']['username']==$issue['user']) echo " | <a href='?deleteissue&id={$issue['id']}' onclick='return confirm(\"Are you sure? All comments will be deleted too.\");'>Delete</a>";
-				echo "</td>\n";
-				echo "</tr>\n";
-			}
-			?>
-		</table>
-	</div>
-	<?php endif; ?>
+        <?php if ($mode=="list"): ?>
+        <div id="list">
+        <h2><?php if (isset($STATUSES[$_GET['status']])) echo $STATUSES[$_GET['status']]." "; ?>Issues</h2>
+            <table border=1 cellpadding=5 width="100%">
+                <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Created by</th>
+                    <th>Date</th>
+                    <th><acronym title="Watching issue?">W</acronym></th>
+                    <th>Last Comment</th>
+                    <th>Actions</th>
+                </tr>
+                <?php
+                $count=1;
+                foreach ($issues as $issue){
+                    $count++;
+                    echo "<tr class='p{$issue['priority']}'>\n";
+                    echo "<td>{$issue['id']}</a></td>\n";
+                    echo "<td><a href='?id={$issue['id']}'>".htmlentities($issue['title'],ENT_COMPAT,"UTF-8")."</a></td>\n";
+                    echo "<td>{$issue['user']}</td>\n";
+                    echo "<td>{$issue['entrytime']}</td>\n";
+                    echo "<td>".($_SESSION['tit']['email']&&strpos($issue['notify_emails'],$_SESSION['tit']['email'])!==FALSE?"&#10003;":"")."</td>\n";
+                    echo "<td>".($issue['comment_user'] ? date("M j",strtotime($issue['comment_time'])) . " (" . $issue['comment_user'] . ")" : "")."</td>\n";
+                    echo "<td><a href='?editissue&id={$issue['id']}'>Edit</a>";
+                    if ($_SESSION['tit']['admin'] || $_SESSION['tit']['username']==$issue['user']) echo " | <a href='?deleteissue&id={$issue['id']}' onclick='return confirm(\"Are you sure? All comments will be deleted too.\");'>Delete</a>";
+                    echo "</td>\n";
+                    echo "</tr>\n";
+                }
+                ?>
+            </table>
+        </div>
+        <?php endif; ?>
 
-	<?php if ($mode=="issue"): ?>
-	<div id="show">
-		<div class="issue">
-			<h2><?php echo htmlentities($issue['title'],ENT_COMPAT,"UTF-8"); ?></h2>
-			<p><?php echo nl2br( preg_replace("/([a-z]+:\/\/\S+)/","<a href='$1'>$1</a>", htmlentities($issue['description'],ENT_COMPAT,"UTF-8") ) ); ?></p>
-		</div>
-		<div class='left'>
-			Priority <select name="priority" onchange="location='<?php echo $_SERVER['PHP_SELF']; ?>?changepriority&id=<?php echo $issue['id']; ?>&priority='+this.value">
-				<option value="1"<?php echo ($issue['priority']==1?"selected":""); ?>>High</option>
-				<option value="2"<?php echo ($issue['priority']==2?"selected":""); ?>>Medium</option>
-				<option value="3"<?php echo ($issue['priority']==3?"selected":""); ?>>Low</option>
-			</select>
-			Status <select name="priority" onchange="location='<?php echo $_SERVER['PHP_SELF']; ?>?changestatus&id=<?php echo $issue['id']; ?>&status='+this.value">
-			<?php foreach($STATUSES as $code=>$name): ?>
-				<option value="<?php echo $code; ?>"<?php echo ($issue['status']==$code?"selected":""); ?>><?php echo $name; ?></option>
-			<?php endforeach; ?>
-			</select>
-		</div>
-		<div class='left'>
-			<form method="POST">
-				<input type="hidden" name="id" value="<?php echo $issue['id']; ?>" />
-				<?php
-					if ($_SESSION['tit']['email']&&strpos($issue['notify_emails'],$_SESSION['tit']['email'])===FALSE)
-						echo "<input type='submit' name='watch' value='Watch' />\n";
-					else
-						echo "<input type='submit' name='unwatch' value='Unwatch' />\n";
-				?>
-			</form>
-		</div>
-		<div class='clear'></div>
-		<div id="comments">
-			<?php
-			if (count($comments)>0) echo "<h3>Comments</h3>\n";
-			foreach ($comments as $comment){
-				echo "<div class='comment'><p>".nl2br( preg_replace("/([a-z]+:\/\/\S+)/","<a href='$1'>$1</a>",htmlentities($comment['description'],ENT_COMPAT,"UTF-8") ) )."</p>";
-				echo "<div class='comment-meta'><em>{$comment['user']}</em> on <em>{$comment['entrytime']}</em> ";
-				if ($_SESSION['tit']['admin'] || $_SESSION['tit']['username']==$comment['user']) echo "<span class='right'><a href='{$_SERVER['PHP_SELF']}?deletecomment&id={$issue['id']}&cid={$comment['id']}' onclick='return confirm(\"Are you sure?\");'>Delete</a></span>";
-				echo "</div></div>\n";
-			}
-			?>
-			<div id="comment-create">
-				<h4>Post a comment</h4>
-				<form method="POST">
-					<input type="hidden" name="issue_id" value="<?php echo $issue['id']; ?>" />
-					<textarea name="description" rows="5" cols="50"></textarea>
-					<label></label>
-					<input type="submit" name="createcomment" value="Comment" />
-				</form>
-			</div>
-		</div>
-	</div>
-	<?php endif; ?>
+        <?php if ($mode=="issue"): ?>
+        <div id="show">
+            <div class="issue">
+                <h2><?php echo htmlentities($issue['title'],ENT_COMPAT,"UTF-8"); ?></h2>
+                <p><?php echo nl2br( preg_replace("/([a-z]+:\/\/\S+)/","<a href='$1'>$1</a>", htmlentities($issue['description'],ENT_COMPAT,"UTF-8") ) ); ?></p>
+            </div>
+            <div class='left'>
+                Priority <select name="priority" onchange="location='<?php echo $_SERVER['PHP_SELF']; ?>?changepriority&id=<?php echo $issue['id']; ?>&priority='+this.value">
+                    <option value="1"<?php echo ($issue['priority']==1?"selected":""); ?>>High</option>
+                    <option value="2"<?php echo ($issue['priority']==2?"selected":""); ?>>Medium</option>
+                    <option value="3"<?php echo ($issue['priority']==3?"selected":""); ?>>Low</option>
+                </select>
+                Status <select name="priority" onchange="location='<?php echo $_SERVER['PHP_SELF']; ?>?changestatus&id=<?php echo $issue['id']; ?>&status='+this.value">
+                <?php foreach($STATUSES as $code=>$name): ?>
+                    <option value="<?php echo $code; ?>"<?php echo ($issue['status']==$code?"selected":""); ?>><?php echo $name; ?></option>
+                <?php endforeach; ?>
+                </select>
+            </div>
+            <div class='left'>
+                <form method="POST">
+                    <input type="hidden" name="id" value="<?php echo $issue['id']; ?>" />
+                    <?php
+                        if ($_SESSION['tit']['email']&&strpos($issue['notify_emails'],$_SESSION['tit']['email'])===FALSE)
+                            echo "<input type='submit' name='watch' value='Watch' />\n";
+                        else
+                            echo "<input type='submit' name='unwatch' value='Unwatch' />\n";
+                    ?>
+                </form>
+            </div>
+            <div class='clear'></div>
+            <div id="comments">
+                <?php
+                if (count($comments)>0) echo "<h3>Comments</h3>\n";
+                foreach ($comments as $comment){
+                    echo "<div class='comment'><p>".nl2br( preg_replace("/([a-z]+:\/\/\S+)/","<a href='$1'>$1</a>",htmlentities($comment['description'],ENT_COMPAT,"UTF-8") ) )."</p>";
+                    echo "<div class='comment-meta'><em>{$comment['user']}</em> on <em>{$comment['entrytime']}</em> ";
+                    if ($_SESSION['tit']['admin'] || $_SESSION['tit']['username']==$comment['user']) echo "<span class='right'><a href='{$_SERVER['PHP_SELF']}?deletecomment&id={$issue['id']}&cid={$comment['id']}' onclick='return confirm(\"Are you sure?\");'>Delete</a></span>";
+                    echo "</div></div>\n";
+                }
+                ?>
+                <div id="comment-create">
+                    <h4>Post a comment</h4>
+                    <form method="POST">
+                        <input type="hidden" name="issue_id" value="<?php echo $issue['id']; ?>" />
+                        <textarea name="description" rows="5" cols="50"></textarea>
+                        <label></label>
+                        <input type="submit" name="createcomment" value="Comment" />
+                    </form>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
+    <?php }
+    if($MULTIPROJECT && !isset($_GET['editissue']) && (isset($_SESSION['tit']['project']) || isset($_GET['editproject']) || $mode === 'projects' ) ) { ?>
+        <div class="clear"></div>
+        <?php if( $mode !== 'projects') { ?><a href="#" onclick="showProjectForm('edit');">Edit project</a> | <a href="#" onclick="showProjectForm('create');">Add project</a> | <a href="?deleteproject&amp;id=<?php echo $_SESSION['tit']['project']['id']; ?>" onclick="return confirm('Are you sure? All linked issues will also be deleted.');">Delete project</a> <?php } else { ?><h2>Create project</h2> <?php } ?>
+        <div id="createproject" class='<?php echo isset($_GET['editproject']) || $mode === 'projects' ?'':'hide'; ?>'>
+            <a href="#" onclick="document.getElementById('createproject').className='hide';" style="float: right;">[Close]</a>
+            <form method="POST">
+                <label></label><input name="project_id" type="hidden" id="project_id" />
+                <label>Name</label><input name="project_name" size="50" type="text" id="project_name" />
+                <label></label><input type="submit" name="createproject" value="Create" id="project_submit" />
+            </form>
+        </div>
+    <?php } ?>
 	<div id="footer">
 		Powered by <a href="https://github.com/jwalanta/tit" alt="Tiny Issue Tracker" target="_blank">Tiny Issue Tracker</a>
 	</div>
