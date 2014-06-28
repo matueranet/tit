@@ -315,7 +315,7 @@ if (isset($_GET["deletecomment"])){
 }
 
 //create/edit project
-if( $MULTIPROJECT && isset($_POST['createproject']) ) {
+if( $MULTIPROJECT && $_SESSION['tit']['admin'] && isset($_POST['createproject']) ) {
     $id=pdo_escape_string($_POST['project_id']);
 	$name=pdo_escape_string($_POST['project_name']);
 	
@@ -338,7 +338,7 @@ if( $MULTIPROJECT && isset($_POST['createproject']) ) {
     die;
 }
 
-if( $MULTIPROJECT && isset($_GET['deleteproject']) ) {
+if( $MULTIPROJECT && $_SESSION['tit']['admin'] && isset($_GET['deleteproject']) ) {
     $id = pdo_escape_string($_GET['id']);
     
     $query = "DELETE FROM issues WHERE project_id = $id";
@@ -448,7 +448,7 @@ function setWatch($id,$addToWatch){
 		.clear{clear:both;}
 	</style>
     
-    <?php if( $MULTIPROJECT && $mode !== 'projects') { ?>
+    <?php if( $MULTIPROJECT && $_SESSION['tit']['admin'] && $mode !== 'projects') { ?>
     <script type="text/javascript">
         function showProjectForm(type) {
             document.getElementById('createproject').className='';
@@ -468,7 +468,7 @@ function setWatch($id,$addToWatch){
     </script>
     <?php } ?>
 </head>
-<body<?php if(isset($_GET['editproject'])) { ?> onload="showProjectForm('edit');" <?php } ?>>
+<body<?php if(isset($_GET['editproject']) && $_SESSION['tit']['admin']) { ?> onload="showProjectForm('edit');" <?php } ?>>
 <div id='container'>
 	<div id="menu">
 		<?php
@@ -500,7 +500,7 @@ function setWatch($id,$addToWatch){
                     <?php foreach( $projects as $project ) { ?>
                         <tr>
                             <td><a href="?project=<?php echo $project['id']; ?>"><?php echo $project['name']; ?></a></td>
-                            <td><a href="?editproject&amp;project=<?php echo $project['id']; ?>#createproject">Edit</a> | <a href="?deleteproject&amp;id=<?php echo $project['id']; ?>" onclick="return confirm('Are you sure? All linked issues will also be deleted.');">Delete</a></td>
+                            <?php if( $_SESSION['tit']['admin'] ) { ?><td><a href="?editproject&amp;project=<?php echo $project['id']; ?>#createproject">Edit</a> | <a href="?deleteproject&amp;id=<?php echo $project['id']; ?>" onclick="return confirm('Are you sure? All linked issues will also be deleted.');">Delete</a></td> <?php } ?>
                         </tr>
                     <?php } ?>
                 </table>
@@ -615,7 +615,7 @@ function setWatch($id,$addToWatch){
         </div>
         <?php endif; ?>
     <?php }
-    if($MULTIPROJECT && !isset($_GET['editissue']) && (isset($_SESSION['tit']['project']) || isset($_GET['editproject']) || $mode === 'projects' ) ) { ?>
+    if($MULTIPROJECT && $_SESSION['tit']['admin'] && !isset($_GET['editissue']) && (isset($_SESSION['tit']['project']) || isset($_GET['editproject']) || $mode === 'projects' ) ) { ?>
         <div class="clear"></div>
         <?php if( $mode !== 'projects') { ?><a href="#" onclick="showProjectForm('edit');">Edit project</a> | <a href="#" onclick="showProjectForm('create');">Add project</a> | <a href="?deleteproject&amp;id=<?php echo $_SESSION['tit']['project']['id']; ?>" onclick="return confirm('Are you sure? All linked issues will also be deleted.');">Delete project</a> <?php } else { ?><h2>Create project</h2> <?php } ?>
         <div id="createproject" class='<?php echo isset($_GET['editproject']) || $mode === 'projects' ?'':'hide'; ?>'>
